@@ -1,0 +1,961 @@
+<body style="margin:0;overflow:hidden;">
+<script src="p5.js"></script>
+<script>
+function setup(){
+  // The listener life... why do we write the same code so many times?
+  // once for each listener.
+  createCanvas(window.innerWidth, window.innerHeight);
+  window.onresize = function(){
+    resizeCanvas(window.innerWidth, window.innerHeight)
+  }
+  noStroke();
+  textFont("monospace");
+  textSize(20);
+
+  window.editpoints = [];
+  window.scrapedTerms = [];
+  window.edit = convert(`((list 1 2 (quote foo)) (list 1 2 (list 3 4)) (+ 1 2 3 4) (incf x) (if nil (list 1 2 "foo") (list 3 4 "bar")) (or (and "zero" nil "never") "James" 'task 'time) (lambda (arg) (+ arg 1)) ((lambda (arg) (+ arg 1)) 5) (defun foo (a b c d) (+ a b c d)) (list 1 2 'a 3) (list 1 '(2 3) 4) (cons 1 '(2 3)) (cons '(1 2) '(3 4)) (append '(1 2) '(3 4)) (append '(1 2 3) '() '(a) '(5 6)) (setf foo (list 'a 'b 'c)) (setf bar (cons 'x (cdr foo))) (setf (third foo) 'goose) (defun should-be-constant () '(one two three)) (should-be-constant) (let ((stuff (should-be-constant))) (setf (third stuff) 'bizarre)))`);
+  //convert(localStorage.edit||"()");
+
+  window.viewBounds = [0, 0];
+  window.eplerp = [0, 0, 0, 0, 0];
+  window.editpoint = {ref:[0]};
+  // window.evalResult = "";
+  recalc(window.edit);
+  window.epunattainablex = editpoint.x;
+  window.viewCenter = [0, 0];
+  window.viewCenterLerp = [0, 0];
+  window.edithistory = [];
+  window.keybuffer = "";
+}
+
+///NOT MY CODE
+var tokenize = function(input) {
+  return input.replace(/\(/g, ' ( ')
+        .replace(/\)/g, ' ) ')
+        .trim()
+        .split(/\s+/);
+};
+var parenthesize = function(input, list) {
+  if (list === undefined) {
+    return parenthesize(input, []);
+  } else {
+    var token = input.shift();
+    if (token === undefined) {
+      return list.pop();
+    } else if (token === "(") {
+      list.push(parenthesize(input, []));
+      return parenthesize(input, list);
+    } else if (token === ")") {
+      return list;
+    } else {
+      return parenthesize(input, list.concat((token)));
+    }
+  }
+};
+///END OF BLOCK
+
+function colorMap(word){
+  if(!isNaN(parseInt(word))||word=="nil"){
+    return [255,55,191];
+  }
+  if("+-*/>=<=".indexOf(word)!=-1||word=="incf"){
+    return [0,120,255];
+  }
+  if((word).indexOf("'")!=-1||word=="quote"){
+    return [230,0,105];
+  }
+  if((word).indexOf('"')!=-1){
+    return [0,180,110];
+  }
+  return {
+  "lambda":[255,125,0],
+  "define":[255,125,0],
+  "arg":[255,125,0],
+  "defun":[255,125,0],
+  "let":[255,125,0],
+  "setf":[255,125,0],
+  "list":[125,0,255],
+  "cons":[125,0,255],
+  "cdr":[125,0,255],
+  "first":[125,0,255],
+  "second":[125,0,255],
+  "third":[125,0,255],
+  "car":[125,0,255],
+  "append":[125,0,255],
+  "cond":[0,200,64],
+  "or":[0,200,64],
+  "and":[0,200,64],
+  "if":[0,200,64],
+
+  }[word]
+}
+
+function convert(text){
+  return objectify(parenthesize(tokenize(text)))
+}
+function deconvert(node, deep){
+  if(node instanceof Array){
+    // if(deep){
+      return "("+node.map(deconvert, true).join(" ")+")";
+    // }
+    // else{
+      // return node.map(deconvert, true).join(" ")
+    // }
+  }
+  else{
+    return node.value;
+  }
+}
+function objectify(raw){
+  if(raw instanceof Array){
+    return raw.map(objectify);
+  }
+  else{
+    return {value: raw, x: 0, y: 0, targetx: 0, targety: 0};
+  }
+}
+function draw(){
+  background(255);
+  fill(0);
+  // text(evalResult+"", window.innerWidth/2, 30);
+  viewCenterLerp[0] = lerp(viewCenterLerp[0], viewCenter[0], anim);
+  viewCenterLerp[1] = lerp(viewCenterLerp[1], viewCenter[1], anim);
+  translate(-viewCenterLerp[0], -viewCenterLerp[1]);
+  // For loops are so dated, carrying vestiges from the days of counters,
+  // pointers, and addresses in memory.
+  // for(var i = 0; i < 10; i++){
+    // rect(i*20, i*20+frameCount, 10, 10);
+  // }
+  render(edit);
+  editpoints.forEach((point)=>{
+    var vcursor=8, hcursor=8, px, py;
+    if(point == editpoint){
+      fill(0);
+      if(point.horiz){
+        vcursor = 0;
+      }
+      else{
+        hcursor = 0;
+      }
+      px = eplerp[0] = eplerp[0]? lerp(eplerp[0], point.x, cursoranim): point.x;
+      py = eplerp[1] = eplerp[1]? lerp(eplerp[1], point.y, cursoranim): point.y;
+      vcursor = eplerp[2] = eplerp[2]? lerp(eplerp[2], vcursor, cursoranim): vcursor;
+      hcursor = eplerp[3] = eplerp[3]? lerp(eplerp[3], hcursor, cursoranim): hcursor;
+      rect(px-cursorwidth - hcursor, py-cursorwidth-vcursor, 2*hcursor + 2*cursorwidth, 2*vcursor + 2*cursorwidth);
+
+      if(keybuffer){
+        fill(0);
+        push();
+        translate(px +cursorwidth -1.5*hcursor, py -1.5*vcursor+cursorwidth);
+        rect(0, 0, 200, 30+linefeed*4);
+        fill(150);
+        window.autoComplete = scrapedTerms.filter((term)=>term.startsWith(keybuffer)).slice(0,5);
+        autoComplete.map(function(entry,index){
+          text(entry, 6, 20 + linefeed*index);
+        })
+        fill(255);
+        text(keybuffer, 6, 20);
+        pop();
+      }
+
+      var bloom = min((frameCount % 60) / 30, 1);
+      fill(0, 100-100*bloom);
+      hcursor += 4*sqrt(bloom);
+      vcursor += 4*sqrt(bloom);
+      rect(px-cursorwidth - hcursor, py-cursorwidth-vcursor, 2*hcursor + 2*cursorwidth, 2*vcursor + 2*cursorwidth);
+      fill(0);
+    }
+
+    fill(0,50 * max(0, 1-2*eplerp[4]));
+    vcursor = hcursor = 0;
+    px = point.x;
+    py = point.y;
+    rect(px-cursorwidth - hcursor, py-cursorwidth-vcursor, 2*hcursor + 2*cursorwidth, 2*vcursor + 2*cursorwidth);
+    if(point == editpoint){
+
+    }
+  });
+  eplerp[4] = max(0, eplerp[4] - 0.05);
+
+  // if(grabbing){
+  //   if (shots.length>grabLimit) {
+  //     grabbing = false;
+  //     showResults();
+  //     shots=[];
+  //   }
+  //   else if(frameCount%discardFrames==0){
+  //     shots.push(document.getElementById("defaultCanvas0").toDataURL("image/png"));
+  //   }
+  // }
+}
+// var shots  = [];
+// var grabLimit = 60;  // Number of screenshots to take
+// var discardFrames = 2;  // Number of screenshots to take
+// var grabbing = false;
+
+// function showResults() {
+//     console.log(shots);
+//     var builder = "";
+//     for (var i=0; i<shots.length; i++) {
+//       builder += ('<a href="' + shots[i] + '" download="'+i+'.png"><a/>');
+//     }
+//     document.write(builder);
+// }
+
+
+var tab = 30, linefeed = 36 , space = 22, anim = 0.2, cursoranim = 0.3, cursorwidth = 2;
+function render(node){
+  if(node instanceof Array){
+    if(node.length == 0){
+    }
+    else {
+      node.forEach(render);
+    }
+  }
+  else{
+    node.x = node.x? lerp(node.x, node.targetx, anim): node.targetx;
+    node.y = node.y? lerp(node.y, node.targety, anim): node.targety;
+    fill(...(colorMap(node.value)||[0]));
+    rect(node.x-6, node.y-20, textWidth(node.value)+12, 26);
+    fill(255);
+    text(node.value, node.x, node.y);
+  }
+}
+var cursorvalignx = -11,cursorvaligny = -7,cursorhalignx = 6,cursorhaligny = 11;
+function clone(array){
+  return array.slice(0);
+}
+function recalc(node, position, ref){
+  var root = !position;
+  if(root){
+    scrapedTerms = [];
+    var dc = deconvert(node);
+    // localStorage.edit = dc;
+    // try{
+    //   subframe.contentWindow.postMessage("(begin "+dc.slice(1), "*");
+    // }
+    // catch(e){
+
+    // }
+    position = [tab,linefeed+10]
+    editpoints = [];
+    eplerp[4] = 1;
+    ref = [];
+    viewBounds = [0, 0];
+  }
+  if(node instanceof Array){
+    if(isAllAtoms(node)){
+      var xoffset = 0;
+      for(var i = 0; i < node.length; i++){
+        ref.push(i);
+        editpoints.push({x: position[0] + xoffset + cursorvalignx, y:position[1] + cursorvaligny, ref: clone(ref), horiz: false});
+        recalc(node[i], [position[0] + xoffset, position[1]], ref);
+        ref.pop();
+        xoffset += textWidth(node[i].value) + space;
+      }
+      ref.push(i);
+      if(node.length == 0)
+        xoffset -= cursorvalignx - cursorhalignx;
+      editpoints.push({x: position[0] + xoffset + cursorvalignx, y:position[1] + cursorvaligny, ref: clone(ref), horiz: false});
+      ref.pop();
+    }
+    else{
+      if(node.length > 0){
+        if(!root && node.length == 1) position[0] += tab;
+        ref.push(0);
+        if(!noAtoms(node))
+        editpoints.push({x: position[0] + cursorvalignx, y:position[1] + cursorvaligny, ref: clone(ref), horiz: false});
+        else
+          editpoints.push({x: position[0] + cursorhalignx, y:position[1] - linefeed + cursorhaligny, ref: clone(ref), horiz: true});
+        if(!(root || node.length == 1) && node[0] instanceof Array) position[0] += tab;
+        recalc(node[0], position, ref);
+        if(!(root || node.length == 1) && node[0] instanceof Array) position[0] -= tab;
+        ref.pop();
+        if(!root && node.length == 1) position[0] -= tab;
+      }
+      if(node.length >= 1){
+        if((!noAtoms(node)) || !root && node.length ==1) position[0] += tab;
+        for(var i = 1; i < node.length; i++){
+          position[1] += linefeed;
+          ref.push(i);
+          editpoints.push({x: position[0] + cursorhalignx, y:position[1] - linefeed + cursorhaligny, ref: clone(ref), horiz: true});
+          recalc(node[i], position, ref);
+          ref.pop();
+        }
+        ref.push(i);
+        editpoints.push({x: position[0] + cursorhalignx, y:position[1] + cursorhaligny, ref: clone(ref), horiz: true});
+        ref.pop();
+        if((!noAtoms(node)) || !root && node.length ==1) position[0] -= tab;
+      }
+    }
+  }
+  else {
+    if(scrapedTerms.indexOf(node.value)==-1){
+      scrapedTerms.unshift(node.value);
+    }
+    node.targetx = position[0];
+    node.targety = position[1];
+    viewBounds[0] = max(viewBounds[0], position[0]);
+    viewBounds[1] = max(viewBounds[1], position[1]-linefeed-10);
+  }
+  if(root && editpoint && editpoint.ref){
+    editpoint = pointFromRef(editpoint.ref);
+  }
+  return node;
+}
+function isAllAtoms(node){
+  return node.every((elem)=>!(elem instanceof Array))
+}
+function noAtoms(node){
+  return node.every((elem)=>(elem instanceof Array))
+}
+window.onkeydown = function(event){
+  switch(event.key){
+    // case "`":
+    //   grabbing = true;
+    //   break;
+    case "ArrowUp":
+      if(event.ctrlKey){
+        SameLevelPrev()
+      }
+      else{
+        ArrowUp();
+      }
+      break;
+    case "ArrowDown":
+      if(event.ctrlKey){
+        SameLevelNext()
+      }
+      else{
+        ArrowDown();
+      }
+      break;
+    case "ArrowLeft":
+      if(event.ctrlKey){
+        StepBackward();
+      }
+      else{
+        ArrowLeft();
+      }
+      break;
+    case "ArrowRight":
+      if(event.ctrlKey){
+        StepForward();
+      }
+      else{
+        ArrowRight();
+      }
+      break;
+    case "Delete":
+      StepForwards();
+      /*var backref = clone(editpoint.ref);
+      if(backref[backref.length-1] >= 0){
+        window.edithistory.push(deconvert(edit));
+        var spliceIndex = backref[backref.length-1];
+        var temp=backref.pop();
+        traverse(edit, backref).splice(spliceIndex, 1);
+        recalc(edit);
+        if(spliceIndex >= 0 || backref.length == 0){
+          backref.push(spliceIndex);
+        }
+        editpoint = pointFromRef(backref);
+        refocus();
+      }
+      else if(backref.length > 1){
+        window.edithistory.push(deconvert(edit));
+        var spliceIn = traverse(edit, backref), dontmessup=false;
+        if(!(spliceIn instanceof Array)){
+          backref.pop();
+          dontmessup=true;
+          spliceIn = traverse(edit, backref);
+        }
+        var spliceIndex = backref[backref.length-1];
+        if(dontmessup){
+          dontmessup = backref.pop();
+        }
+        else{
+          backref.pop();
+        }
+        traverse(edit, backref).splice(spliceIndex, 1, ...spliceIn);
+        recalc(edit);
+        if(dontmessup){
+          backref.push(dontmessup);
+        }
+        editpoint = pointFromRef(backref);
+        refocus();
+      }*/
+    case "Backspace":
+      if(event.key == "Backspace" && keybuffer){
+        keybuffer = keybuffer.slice(0, -1);
+        break;
+      }
+      var backref = clone(editpoint.ref);
+      // Delete block
+      if(backref[backref.length-1] > 0){
+        window.edithistory.push(deconvert(edit));
+        var spliceIndex = backref[backref.length-1] - 1;
+        var temp=backref.pop();
+        traverse(edit, backref).splice(spliceIndex, 1);
+        recalc(edit);
+        if(spliceIndex >= 0 || backref.length == 0){
+          backref.push(spliceIndex);
+        }
+        editpoint = pointFromRef(backref);
+        refocus();
+      }
+      else{
+        //if(Join())
+        Unwrap();
+        /*window.edithistory.push(deconvert(edit));
+        var spliceIn = traverse(edit, backref), dontmessup=false;
+        if(!(spliceIn instanceof Array)){
+          backref.pop();
+          dontmessup=true;
+          spliceIn = traverse(edit, backref);
+        }
+        var spliceIndex = backref[backref.length-1];
+        if(dontmessup){
+          dontmessup = backref.pop();
+        }
+        else{
+          backref.pop();
+        }
+        traverse(edit, backref).splice(spliceIndex, 1, ...spliceIn);
+        recalc(edit);
+        if(dontmessup){
+          backref.push(dontmessup);
+        }
+        editpoint = pointFromRef(backref);
+        refocus();*/
+      }
+      break;
+      case "Tab":
+        window.edithistory.push(deconvert(edit));
+        if(event.shiftKey){
+          // Unwrap/Peel/Shallow (better implementation)
+          var backref = clone(editpoint.ref);
+          // if(backref[backref.length-1] > 0){
+            // Rparen();
+          // }
+          // else{
+            Unwrap();
+          // }
+          event.preventDefault();
+        }
+        // Wrap/deepen: a |b c -> a (|b) c
+        else{
+          //Singlewrap implementation
+          //Wrap()
+          Chain();
+          event.preventDefault();
+        }
+      break;
+
+      case "(":
+        window.edithistory.push(deconvert(edit));
+        Lparen2();
+        event.preventDefault();
+        break;
+
+      case ")":
+        window.edithistory.push(deconvert(edit));
+        Rparen2();
+        event.preventDefault();
+        break;
+      case "]": // Pop: (a b|c d) --> (a b|c) d
+        window.edithistory.push(deconvert(edit));
+        Pop();
+        event.preventDefault();
+        break;
+      case "[": // Push: (a b|c) d --> (a b|c d)
+        window.edithistory.push(deconvert(edit));
+        Push();
+        event.preventDefault();
+        break;
+
+    case " ":
+    case "Enter": // Split
+      if(keybuffer){
+        var insert = (event.key == " " && autoComplete.length)? autoComplete[0]:keybuffer;
+          var backref = clone(editpoint.ref);
+          if(backref.length>0){
+            window.edithistory.push(deconvert(edit));
+            var spliceIndex = backref[backref.length-1];
+            var temp = backref.pop();
+            traverse(edit, backref).splice(spliceIndex, 0, objectify(insert));
+            recalc(edit);
+            backref.push(temp+1);
+            editpoint = pointFromRef(backref);
+            refocus();
+          }
+          keybuffer = "";
+          break;
+      }
+      if(event.key==" "){
+        New();
+      }
+      else {
+        UpALevelNew();
+        /*if(Split()){
+          var backref = clone(editpoint.ref);
+          if(backref.length > 1){
+            var spliceIn = traverse(edit, backref);
+            var spliceIndex = backref.pop();
+            if(spliceIndex == 0){
+              StepBackward();
+            }
+            else if(spliceIndex >= traverse(edit,backref).length){
+              StepForward();
+            }
+          }
+        }*/
+      }
+
+      break;
+    default:
+      if(event.key.length == 1){
+        if(event.key == "z" && event.ctrlKey){
+          if(window.edithistory.length){
+            edit = recalc(convert(window.edithistory.pop()));
+            refocus();
+          }
+          return
+        }
+        window.keybuffer += event.key;
+      }
+      break;
+  }
+}
+function StepBackward(){
+  var backref = clone(editpoint.ref);
+  var index = backref.pop();
+  if(index == 0){
+    if(backref.length > 0){
+      editpoint = pointFromRef(backref);
+      refocus();
+    }
+  }
+  else{
+    backref.push(index);
+    backref[backref.length-1]--;
+    while(traverse(edit, backref) instanceof Array){
+      backref.push(traverse(edit, backref).length);
+    }
+    refocus();
+    editpoint = pointFromRef(backref);
+  }
+}
+
+function pointFromRef(ref){
+  if(ref.length == 0){
+    return editpoints[0];
+  }
+  var hmm=editpoints.filter((point)=>point.ref+"" == ref+"")
+  if(hmm.length == 0){
+    return pointFromRef(ref.slice(0, ref.length - 2));
+  }
+  return hmm[0];
+}
+function traverse(node, ref){
+  var result = node;
+  for(var r of ref){
+    result = result[r];
+  }
+  return result;
+}
+function refocus(){
+  while(editpoint.y-viewCenter[1] < 0){
+    viewCenter[1] -= window.innerHeight / 2;
+  }
+  while(editpoint.y-viewCenter[1] > window.innerHeight){
+    viewCenter[1] += window.innerHeight / 2;
+  }
+  viewCenter[1]=min(max(viewCenter[1], 0), viewBounds[1]);
+}
+document.body.onmousewheel = function(event){
+  //viewCenter[0]+=event.deltaX;
+  viewCenter[1]=min(max(viewCenter[1] + event.deltaY, 0), viewBounds[1]);
+};
+function mousePressed(){
+  var jumpto = editpoints.sort((a,b)=>1000000*(abs(a.y-mouseY - viewCenter[1]) - abs(b.y-mouseY - viewCenter[1])) + abs(a.x-mouseX - viewCenter[0]) - abs(b.x-mouseX - viewCenter[0]));
+  if(jumpto.length){
+    editpoint = jumpto[0];
+    refocus();
+  }
+}
+function ArrowUp(){
+  var jumpto = editpoints.filter((point)=>point.y<editpoint.y).sort((a,b)=>1000000*(b.y - a.y) + abs(a.x-epunattainablex) - abs(b.x-epunattainablex));
+  if(jumpto.length){
+    editpoint = jumpto[0];
+    refocus();
+  }
+}
+function ArrowDown(){
+  var jumpto = editpoints.filter((point)=>point.y>editpoint.y).sort((a,b)=>1000000*(a.y - b.y) + abs(a.x-epunattainablex) - abs(b.x-epunattainablex));
+  if(jumpto.length){
+    editpoint = jumpto[0];
+    refocus();
+  }
+}
+function ArrowLeft(){
+  var jumpto = editpoints.filter((point)=>point.x<editpoint.x && abs(point.y - editpoint.y) < linefeed).sort((a,b)=>(b.x - a.x) + 1000000*(abs(a.y-editpoint.y-0.0001) - abs(b.y-editpoint.y-0.0001)));
+  if(jumpto.length){
+    editpoint = jumpto[0];
+    epunattainablex = editpoint.x;
+    refocus();
+  }
+}
+function ArrowRight(){
+  var jumpto = editpoints.filter((point)=>point.x>editpoint.x && abs(point.y - editpoint.y) < linefeed).sort((a,b)=>(a.x - b.x) + 1000000*(abs(a.y-editpoint.y-0.0001) - abs(b.y-editpoint.y-0.0001)));
+  if(jumpto.length){
+    editpoint = jumpto[0];
+    epunattainablex = editpoint.x;
+    refocus();
+  }
+}
+function Split(){ // Split: (a b|c d) -> (a b|)(c d)
+  window.edithistory.push(deconvert(edit));
+  var backref = clone(editpoint.ref);
+  if(backref.length > 1){
+    var spliceIn = traverse(edit, backref);
+    var spliceIndex = backref.pop();
+    if(spliceIndex > 0 && spliceIndex < traverse(edit,backref).length){
+      var spliceIn = traverse(edit,backref).splice(spliceIndex);
+      var parentSpliceIndex = backref.pop();
+      traverse(edit,backref).splice(parentSpliceIndex+1,0, spliceIn);
+      // backref.push(parentSpliceIndex);
+      // backref.push(spliceIndex);
+      backref.push(parentSpliceIndex+1);
+      backref.push(0);
+      recalc(edit);
+      editpoint = pointFromRef(backref);
+      refocus();
+    }
+    else return true;
+  }
+}
+function Join(){ // Join: (a b)(|c d) -> (a b |c d)
+  window.edithistory.push(deconvert(edit));
+  var backref = clone(editpoint.ref);
+  if(backref.length > 1){
+    var spliceIndex = backref.pop();
+    var parentSpliceIndex = backref.pop();
+    if(parentSpliceIndex > 0){
+      var context = traverse(edit,backref);
+      var spliceIn = context.slice(parentSpliceIndex-1,parentSpliceIndex+1);
+      if(spliceIn[0] instanceof Array){
+        var combined = spliceIn[0].concat(spliceIn[1]);
+        traverse(edit,backref).splice(parentSpliceIndex-1,2, combined);
+        backref.push(parentSpliceIndex-1);
+        backref.push(spliceIn[0].length);
+      }
+      else{
+        return true;
+      }
+      recalc(edit);
+      editpoint = pointFromRef(backref);
+      refocus();
+    }
+    else{
+      return true;
+    }
+  }
+}
+function Wrap(){
+  var backref = clone(editpoint.ref);
+  var spliceIn = traverse(edit, backref);
+  if(spliceIn){
+    spliceIndex = backref.length == 0? 0: backref[backref.length-1];
+    var temp = backref.pop();
+    traverse(edit, backref).splice(spliceIndex, 1, [spliceIn]);
+    recalc(edit);
+    backref.push(temp);
+    backref.push(0);
+    editpoint = pointFromRef(backref);
+    refocus();
+  }
+}
+
+function Unwrap(){// Unwrap/Peel/Shallow: (a b c d) -> a b c d
+  var backref = clone(editpoint.ref);
+  if(backref.length > 1){
+    backref.pop();
+    var spliceIn = traverse(edit, backref);
+    var spliceIndex = backref.pop();
+    traverse(edit, backref).splice(spliceIndex, 1, ...spliceIn);
+    recalc(edit);
+    backref.push(spliceIndex);
+    editpoint = pointFromRef(backref);
+    refocus();
+  }
+}
+function Lparen(){// Lparen: a|b c d->a (b c d)
+  var backref = clone(editpoint.ref);
+  var spliceIn = traverse(edit, backref);
+  var spliceIndex = backref.pop();
+  traverse(edit, backref).push(traverse(edit, backref).splice(spliceIndex));
+  recalc(edit);
+  backref.push(spliceIndex);
+  backref.push(0);
+  editpoint = pointFromRef(backref);
+  refocus();
+}
+function Rparen(){//Rparen a (b c|d) -> a (b c) d
+  //(except also removes empty nill)
+  var backref = clone(editpoint.ref);
+  if(backref.length > 1){
+    var spliceIn = traverse(edit, backref);
+    var spliceIndex = backref.pop();
+    var spliceIn = traverse(edit, backref).splice(spliceIndex);
+    var parentSpliceIndex = backref.pop();
+    if(spliceIndex == 0){
+      traverse(edit,backref).splice(parentSpliceIndex,1,...spliceIn);
+    }
+    else{
+      traverse(edit,backref).splice(parentSpliceIndex+1,0,...spliceIn);
+    }
+    recalc(edit);
+    if(spliceIndex == 0){
+      backref.push(parentSpliceIndex);
+    }
+    else{
+      backref.push(parentSpliceIndex+1);
+    }
+    editpoint = pointFromRef(backref);
+    refocus();
+  }
+}
+function New(){// Insert nil ()
+  var backref = clone(editpoint.ref);
+  if(backref.length>0){
+    window.edithistory.push(deconvert(edit));
+    var spliceIndex = backref[backref.length-1];
+    var temp = backref.pop();
+    traverse(edit, backref).splice(spliceIndex, 0, []);
+    recalc(edit);
+    backref.push(temp);
+    backref.push(0);
+    editpoint = pointFromRef(backref);
+    refocus();
+  }
+}
+function StepForward(){
+  var backref = clone(editpoint.ref);
+  var index = backref.pop();
+  if(index >= traverse(edit, backref).length){
+    if(backref.length > 0){
+      backref[backref.length-1]++;
+      editpoint = pointFromRef(backref);
+      refocus();
+    }
+  }
+  else{
+    backref.push(index);
+    if(traverse(edit, backref) instanceof Array){
+      backref.push(0);
+    }
+    else{
+      backref[backref.length-1]++;
+    }
+    editpoint = pointFromRef(backref);
+    refocus();
+  }
+
+}
+function StepBackward(){
+  var backref = clone(editpoint.ref);
+  var index = backref.pop();
+  if(index == 0){
+    if(backref.length > 0){
+      editpoint = pointFromRef(backref);
+      refocus();
+    }
+  }
+  else{
+    backref.push(index);
+    backref[backref.length-1]--;
+    while(traverse(edit, backref) instanceof Array){
+      backref.push(traverse(edit, backref).length);
+    }
+    refocus();
+    editpoint = pointFromRef(backref);
+  }
+}
+function SameLevelPrev(){
+  var backref = clone(editpoint.ref);
+  var lastIndex = backref.pop();
+  lastIndex = min(max(lastIndex - 1,0), traverse(edit, backref).length);
+  backref.push(lastIndex);
+  editpoint = pointFromRef(backref);
+  refocus();
+}
+function SameLevelNext(){
+  var backref = clone(editpoint.ref);
+  var lastIndex = backref.pop();
+  lastIndex = min(max(lastIndex + 1,0), traverse(edit, backref).length);
+  backref.push(lastIndex);
+  editpoint = pointFromRef(backref);
+  refocus();
+}
+function UpALevel(){
+  var backref = clone(editpoint.ref);
+  if(backref.length > 1){
+    var currentIndex = backref.pop();
+    // var lastIndex = backref.pop();
+    // lastIndex = min(max(lastIndex + 1,0), traverse(edit, backref).length);
+    // backref.push(lastIndex);
+    editpoint = pointFromRef(backref);
+    refocus();
+  }
+  else{
+    return true;
+  }
+}
+function Push(){
+  var backref = clone(editpoint.ref);
+  if(backref.length > 1){
+    var spliceIn = traverse(edit, backref);
+    var spliceIndex = backref.pop();
+    var parentSpliceIndex = backref.pop();
+    if(parentSpliceIndex + 1 < traverse(edit,backref).length){
+      var spliceIn = traverse(edit,backref).splice(parentSpliceIndex+1,1)[0];
+      backref.push(parentSpliceIndex);
+      traverse(edit,backref).push(spliceIn);
+      backref.push(spliceIndex);
+      recalc(edit);
+      editpoint = pointFromRef(backref);
+      refocus();
+    }
+  }
+}
+function Pop(){
+  var backref = clone(editpoint.ref);
+  if(backref.length > 1){
+    var spliceIn = traverse(edit, backref);
+    var spliceIndex = backref.pop();
+    var context = traverse(edit, backref);
+    if(context.length>0){
+      spliceIn = context.pop();
+      var parentSpliceIndex = backref.pop();
+      traverse(edit, backref).splice(parentSpliceIndex+1, 0, spliceIn);
+      recalc(edit);
+      backref.push(parentSpliceIndex);
+      backref.push(min(spliceIndex, context.length));
+      editpoint = pointFromRef(backref);
+      refocus();
+    }
+  }
+}
+/*
+Some interesting shortcuts/congruences
+
+(a b c d) -> (a b) (c d)
+Split
+Lparen + Rparen ! Requires an additional cursor move
+Rparen + Lparen ! order is important
+
+(a b) (c d) -> (a b c d)
+Join
+Unwrap + Push + Push
+Push + Unwrap ! Only one push needed
+
+a (b c) d -> a b c d
+Unwrap
+Rparen ! Rparen needs to be in the right place
+
+a b c d -> a (b c) d
+Wrap + Push + Push ! Need to push once per item
+Lparen + Rparen ! Effective for many terms
+
+(a b c) d -> (a b c d)
+Push (akin to moving parenthesis)
+Wrap + Join
+
+(a b c d) -> (a b c) d
+Pop (akin to moving parenthesis)
+Rparen ! can pop multiple at once, efficiently
+Split + Unwrap ! ^ but ;Cleaving it with Split keeps the floating terms together for further manipulation
+
+a b c d -> a (b c d)
+Lparen (akin to typing a parenthesis with implicit parinfer/autocomplete)
+Wrap + Push + Push
+
+a (b c d) -> a (b c) d
+Rparen (akin to typing a parenthesis with implicit parinfer/autocomplete)
+Pop ! ineffective for a lot of terms
+
+* Wrap/Unwrap, Push, and Pop, seem to do the same thing as Lparen and Rparen - juggling and creating parenthesis.
+* Lparen and Rparen have the upper hand on larger ranges. (Unless Wrap works with multiselect)
+* Join is easily written as Push and Unwrap, Split is easily written as Lparen and Rparen.
+
+* Join/Split operate on/create groups/arrays. Meanwhile, push/pop, and Lparen/Rparen are more "low level". Rparen can be implemented with a lot of pops - a lparen/rparen combo can be rewritten at lots of push/pop to select a specific range. I'd even say that Push/pop has fewer "side effects" than Lparen and Rparen.
+
+*/
+/*
+Hmm. After using this a bit, there's a duality between function and argument, like oil and water. Usually, the function wants to come first, and arguments later. This makes certain operations like Split or Join fairly codebreaking.
+
+(f 1 2 (g 3 4))
+
+It seems like modifications to all but the first item in the array are OK...
+Removing parenthesis from things seem really sad... Sorry unwrap
+
+Split - Kinda sad
+Join - Also sad
+Unwrap - A bit sad, spills out function and its args into the surroundings
+Wrap - Unless a function is already written
+Push - Now more useful
+Pop - Also useful
+Lparen - Unless a function is already there
+Rparen - extension of pop
+
+There's also me thinking about a new operation akin to "Chain"... more of a focus shift...
+
+Quote needs better handling... also, because wrapping almost always happens with function names, there could be a shorthand for that.
+
+So, a new set of commands:
+"What I just wrote was actually a function name (or not)" : wrap/unwrap
+"I'm about to write a function"
+"I'm done with this closure, jump to the end"
+"Take that and apply another function to it" : chain
+
+Map the Lparen key and Rparen key to familiar, equivalent ops (create nil and jump context)? One of the things I wasn't completely satisfied with in terms of Lparen as an operator was that it created far-reaching changes across the codebase. To think of it, Lparen is kind of a context-sensitive extension of Push, and Rparen a context-sensitive Pop.
+
+Anyways,
+"What I just wrote was actually a function name (or not)" : wrap/unwrap?
+a b | c -> a (b|) c
+
+"I'm about to write a function" <-- Equivalent "Lparen key" behavior: Lparen2?
+a b | c -> a b (|) c
+
+^ can pair the above with a closure jump: "newline": Rparen2 + Lparen2
+(a b) (c d) -> (a b) (|) (c d)
+*****
+"I'm done with this closure, jump to the end" (non-mutative) <-- Equivalent "Rparen key" behavior: Rparen2?
+a (b x y) c -> a (b x y)| c
+  *******
+"Take the closure and apply another function to it" : chain
+a (b x y) c -> a (| (b x y))
+  *******
+Also, better closure jumping?
+*/
+function Lparen2(){
+  New();
+}
+function Rparen2(){
+  if(!UpALevel())
+    SameLevelNext();
+}
+function UpALevelNew(){
+  Rparen2();
+  Lparen2();
+}
+function Chain(){
+  UpALevel();
+  Wrap();
+}
+
+
+
+</script>
+</body>
