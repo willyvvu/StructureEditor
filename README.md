@@ -22,8 +22,6 @@ Instead of working with text as an immediate form, a structure editor operates d
 
 ![](StructureEditor5.png)
 
-![](StructureEditor6.png)
-
 ---
 
 Learning Focus: Editor Building, Visual Programming, Spatial Debugging, 2D Animation
