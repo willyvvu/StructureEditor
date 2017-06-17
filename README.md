@@ -1,6 +1,6 @@
 # Structure Editor
 
-A prototype editor for Scheme that edits the structure of the code, rather than text.
+A prototype editor for Scheme that edits the structure of code, rather than text -- turning syntax errors into productive accidents that maintain creative flow.
 
 [Try in Browser](https://willy-vvu.github.io/StructureEditor/)
 
